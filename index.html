@@ -287,7 +287,7 @@
         
         <div class="upload-section">
             <div class="file-input-wrapper">
-                <input type="file" id="pdfFile" accept=".pdf" multiple>
+                <input type="file" id="pdfFile" multiple>
                 <label for="pdfFile" class="file-input-label">📁 בחר קבצי PDF</label>
             </div>
             <div class="file-name" id="fileName"></div>
@@ -334,6 +334,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -355,10 +356,20 @@
         });
 
         pdfFile.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                const files = Array.from(e.target.files).map(f => f.name).join(', ');
+            // Filter only PDF files
+            const pdfFiles = Array.from(e.target.files).filter(f => 
+                f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+            );
+            
+            if (pdfFiles.length > 0) {
+                const files = pdfFiles.map(f => f.name).join(', ');
                 fileName.textContent = `✓ ${files}`;
                 convertBtn.disabled = false;
+                
+                // Update the FileList-like object
+                const dataTransfer = new DataTransfer();
+                pdfFiles.forEach(file => dataTransfer.items.add(file));
+                pdfFile.files = dataTransfer.files;
             } else {
                 fileName.textContent = '';
                 convertBtn.disabled = true;
@@ -376,6 +387,7 @@
                 const files = Array.from(pdfFile.files);
                 let totalPages = 0;
                 let processedPages = 0;
+                const zip = new JSZip();
 
                 // ספור סה״כ עמודים
                 for (const file of files) {
@@ -384,10 +396,13 @@
                     totalPages += pdf.numPages;
                 }
 
-                // המר כל עמוד לתמונה
+                // המר כל עמוד לתמונה ותוסף ל-ZIP
                 for (const file of files) {
                     const arrayBuffer = await file.arrayBuffer();
                     const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+                    const baseName = file.name.replace('.pdf', '');
+                    const folderName = baseName; // תיקיה לכל PDF
+                    const folder = zip.folder(folderName);
 
                     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
                         const page = await pdf.getPage(pageNum);
@@ -401,31 +416,36 @@
                         await page.render({canvasContext: ctx, viewport}).promise;
 
                         // יצירת שם קובץ
-                        const baseName = file.name.replace('.pdf', '');
                         const imageName = `${baseName}_page_${pageNum}.${imageFormat.value}`;
 
-                        // הורדת תמונה
-                        canvas.toBlob((blob) => {
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = imageName;
-                            a.click();
-                            URL.revokeObjectURL(url);
-                        }, `image/${imageFormat.value}`, imageFormat.value === 'jpg' ? parseInt(quality.value) / 100 : undefined);
+                        // המרה ל-blob והוסף ל-ZIP
+                        const blob = await new Promise(resolve => {
+                            canvas.toBlob(resolve, `image/${imageFormat.value}`, imageFormat.value === 'jpg' ? parseInt(quality.value) / 100 : undefined);
+                        });
+                        folder.file(imageName, blob);
 
                         processedPages++;
                         const progress = (processedPages / totalPages) * 100;
                         progressFill.style.width = progress + '%';
                         progressText.textContent = `עמודים שהומרו: ${processedPages}/${totalPages}`;
 
-                        // השהיית קטנה בין הורדות
-                        await new Promise(resolve => setTimeout(resolve, 500));
+                        // השהיית קטנה בין ההמרות
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
                 }
 
+                // יצירת והורדת ZIP
+                progressText.textContent = 'יוצר קובץ ZIP...';
+                const zipBlob = await zip.generateAsync({type: 'blob'});
+                const zipUrl = URL.createObjectURL(zipBlob);
+                const a = document.createElement('a');
+                a.href = zipUrl;
+                a.download = 'PDF_Images.zip';
+                a.click();
+                URL.revokeObjectURL(zipUrl);
+
                 // הצגת הודעת הצלחה
-                showResult('success', 'ההמרה הושלמה בהצלחה!', `${processedPages} עמודים הומרו לתמונות.<br><br>✓ קבצים נשמרו באתיקט ההורדות.<br>🎯 אתה יכול למצוא אותם בתיקיית ההורדות של הדפדפן.`);
+                showResult('success', 'ההמרה הושלמה בהצלחה!', `${processedPages} עמודים הומרו לתמונות.<br><br>✓ כל התמונות נשמרו בקובץ ZIP.<br>🎯 קובץ <strong>PDF_Images.zip</strong> הורד.<br>📁 חלץ את הקובץ כדי לראות את התמונות.`);
                 
             } catch (error) {
                 showResult('error', 'שגיאה בהמרה', error.message);
